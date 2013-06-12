@@ -3,6 +3,7 @@
 
 
 from selenium import webdriver
+from selenium.common.exceptions import WebDriverException, NoSuchElementException
 from urllib import urlencode
 import httplib
 import time, os, sys, string, multiprocessing, traceback, shutil, StringIO, thread
@@ -11,13 +12,45 @@ import socket, errno, signal, subprocess
 from pprint import pprint
 import json
 import planparser
-
+import re
 
 import ConfigParser
 config = ConfigParser.ConfigParser()
 
 VERBOSE = True
-TIMEOUT = 30
+
+def html2text(data):
+    # remove the newlines
+    data = data.replace("\n", " ")
+    data = data.replace("\r", " ")
+
+    # replace consecutive spaces into a single one
+    data = " ".join(data.split())
+
+    # get only the body content
+    bodyPat = re.compile(r'<body[^<>]*?>(.*?)</body>', re.I)
+    result = re.findall(bodyPat, data)
+    if result:
+        data = result[0]
+
+    # now remove the java script
+    p = re.compile(r'<script[^<>]*?>.*?</script>')
+    data = p.sub('', data)
+
+    # remove the css styles
+    p = re.compile(r'<style[^<>]*?>.*?</style>')
+    data = p.sub('', data)
+
+    # remove html comments
+    p = re.compile(r'')
+    data = p.sub('', data)
+
+    # remove all the tags
+    p = re.compile(r'<[^<]*?>')
+    data = p.sub('', data)
+
+    return data
+
 
 def kill_process(process_id):
     try:
@@ -58,7 +91,7 @@ class HttpRequest():
                 connection.request(method, path)
         except socket.error as e:
             if e.errno == errno.ECONNREFUSED:
-                raise Exception, self.name + " not reachable: " + self.hostname + " " + str(self.port)
+                raise Exception, self.name + " not reachable on " + self.hostname + " " + str(self.port)
             else:
                 raise
 
@@ -164,7 +197,7 @@ class Firefox():
 
 class AutomationScript(object):
 
-    def __init__(self, tag, label, url, driver, bmp, timeout_shared, do_screenshot):
+    def __init__(self, tag, label, url, driver, bmp, timeout_shared, timeout, do_screenshot):
 
         if url.startswith("script"):
             self.url = None
@@ -180,12 +213,10 @@ class AutomationScript(object):
         self.tag = tag
         self.label = label
         self.timeout_shared = timeout_shared
+        self.timeout = timeout
         self.driver = driver
         self.bmp = bmp
         self.do_screenshot = do_screenshot
-
-        self.globals = {"ScreenshotDriver": AutomationScriptContextManager(automation_script = self, do_screenshot = True),
-                        "TimingDriver": AutomationScriptContextManager(automation_script = self, do_screenshot = False)}
 
         self.hars = []
 
@@ -197,6 +228,11 @@ class AutomationScript(object):
             f = open(script_path, "rb")
             script_src = f.read()
             f.close()
+
+            self.globals = {"ScreenshotDriver": AutomationScriptContextManager(automation_script = self, do_screenshot = True),
+                            "Driver": AutomationScriptContextManager(automation_script = self, do_screenshot = False),
+                            "__script_path__": os.path.dirname(os.path.abspath(script_path))}
+
             exec script_src in self.globals
 
             self.flow = self.globals["flow"]
@@ -226,7 +262,7 @@ class AutomationScript(object):
         return self.hars
 
     def reset_timeout(self):
-        self.timeout_shared.value = TIMEOUT # next round gets another timeout!
+        self.timeout_shared.value = self.timeout # next round gets another timeout!
 
 
 
@@ -254,6 +290,125 @@ class AutomationScriptContextManager(object):
 
         self.info_msg.append(msg)
 
+    def is_error_page(self):
+        """ Returns true, if the page we are on is an firefox-error page """
+        return self.automation_script.driver.title == "Problem loading page"
+
+    def wait_for_page(self, url, timeout):
+        """ waits until timeout, or the browser reaches the url """
+
+        while (self.automation_script.driver.current_url != url) and (timeout >= 0):
+            time.sleep(0.1)
+            timeout -= 0.1
+
+        if timeout < 0:
+            return "timeout"
+        elif (self.automation_script.driver.current_url != url) or self.is_error_page():
+            return "error"
+        else:
+            return "ok"
+
+
+    def has_element(self, by = "id", value = None):
+        """ Gracefully tries to find an element """
+        try:
+            el = self.automation_script.driver.find_element(by = by, value = value)
+            return el
+        except NoSuchElementException:
+            return None
+
+    def click_option(self, select_element, value):
+        """ Selects from the select_element the specific option """
+
+        for option in select_element.find_elements_by_tag_name("option"):
+            if option.get_attribute("value") == value:
+                option.click()
+                return True
+            elif option.text == value:
+                option.click()
+                return True
+
+        return False
+
+    def assert_text_on_page(self, text, timeout = 0):
+        """ Checks whether a text is on page or not! """
+
+        while (timeout >= 0) and (text not in html2text(self.automation_script.driver.page_source)):
+            time.sleep(0.1)
+            timeout -= 0.1
+
+        if text not in html2text(self.automation_script.driver.page_source):
+            raise AssertionError, "Text '" + text + "' not found in current page!"
+
+    def wait_for_text(self, text, timeout):
+        """ waits until timeout, or the text is on the page """
+
+        while (timeout >= 0) and (text not in html2text(self.automation_script.driver.page_source)):
+            time.sleep(0.1)
+            timeout -= 0.1
+
+        if text not in html2text(self.automation_script.driver.page_source):
+            return "ok"
+        else:
+            return "timeout"
+
+    def wait_for_link(self, text, timeout):
+        """ waits until timeout, or the link with this text is on the page """
+
+        link_el = None
+        while (not link_el) and (timeout >= 0):
+            try:
+                link_el = self.automation_script.driver.find_elements_by_link_text(text)
+            except:
+                link_el = None
+                time.sleep(1)
+            timeout -= 1
+
+        return link_el[0]
+
+
+
+    def fill_form(self, data):
+        """ Fill a complete form """
+
+        for locator, value in data.items():
+
+            locator_type, locator_id = locator.split(":")
+            locator_id = locator_id.strip()
+
+            form_item = self.automation_script.driver.find_element(by = locator_type, value = locator_id)
+            if form_item.tag_name == "select":
+                self.click_option(form_item, value)
+            elif form_item.get_attribute("type") == "checkbox":
+                if form_item.is_selected() != value:
+                    form_item.click()
+            elif form_item.get_attribute("type") == "file":
+                form_item.send_keys(value)
+            else:
+                form_item.clear()
+                form_item.send_keys(value)
+
+    def dismiss_alert(self):
+        """ If an alert is popped up, dismiss it and return "dismissed".
+        If no alert is popped up: return "no_alert"
+        """
+
+        alert_box = self.automation_script.driver.switch_to_alert()
+        try:
+            alert_box.accept()
+            self.automation_script.driver.switch_to_default_content()
+            return "dismissed"
+        except:
+            pass
+
+        try:
+            self.automation_script.driver.switch_to_default_content()
+        except:
+            pass
+
+        return "no_alert"
+
+
     def __enter__(self):
 
         self.automation_script.reset_timeout()
@@ -261,6 +416,17 @@ class AutomationScriptContextManager(object):
         self.error_msg = ""
 
         self.automation_script.driver.info = self.info
+        self.automation_script.driver.wait_for_page = self.wait_for_page
+        self.automation_script.driver.wait_for_text = self.wait_for_text
+        self.automation_script.driver.wait_for_link = self.wait_for_link
+        self.automation_script.driver.is_error_page = self.is_error_page
+        self.automation_script.driver.has_element = self.has_element
+        self.automation_script.driver.click_option = self.click_option
+        self.automation_script.driver.assert_text_on_page = self.assert_text_on_page
+        self.automation_script.driver.fill_form = self.fill_form
+        self.automation_script.driver.dismiss_alert = self.dismiss_alert
+
+
 
         return self.automation_script.driver
 
@@ -307,14 +473,16 @@ class AutomationScriptContextManager(object):
 
 
 
-def try_dump(tag, label, url, do_screenshot, verbose, proxy_port, profile_browser_path, timeout_shared):
+def try_dump(tag, label, url, do_screenshot, verbose, proxy_port, profile_browser_path, timeout_shared, timeout, rc_shared):
     try:
-        dump(tag, label, url, do_screenshot, verbose, proxy_port, profile_browser_path, timeout_shared)
+        dump(tag, label, url, do_screenshot, verbose, proxy_port, profile_browser_path, timeout_shared, timeout)
+        rc_shared.value = "ok"
     except:
+        rc_shared.value = "error"
         if verbose:
             raise
 
-def dump(tag, label, url, do_screenshot, verbose, proxy_port, profile_browser_path, timeout_shared):
+def dump(tag, label, url, do_screenshot, verbose, proxy_port, profile_browser_path, timeout_shared, timeout):
     # BrowserMob Proxy constructor
     bmp = BrowserMobProxy(config.get("browsermob", "proxy_api_host"),
                           config.get("browsermob", "proxy_api_port"))
@@ -345,7 +513,8 @@ def dump(tag, label, url, do_screenshot, verbose, proxy_port, profile_browser_pa
                                   do_screenshot=do_screenshot,
                                   driver=firefox.driver,
                                   bmp=bmp,
-                                  timeout_shared=timeout_shared)
+                                  timeout_shared=timeout_shared,
+                                  timeout=timeout)
 
         script.setup()
         script.execute()
@@ -379,8 +548,9 @@ def secure_dump(tag, label, url, do_screenshot, timeout, verbose, proxy_port):
 
     browser_profile_path = multiprocessing.Array("c", 256)
     timeout_shared = multiprocessing.Value("i", timeout)
+    rc_shared = multiprocessing.Array("c", 256)
 
-    p = multiprocessing.Process(target=try_dump, args=(tag, label, url, do_screenshot, verbose, proxy_port, browser_profile_path, timeout_shared))
+    p = multiprocessing.Process(target=try_dump, args=(tag, label, url, do_screenshot, verbose, proxy_port, browser_profile_path, timeout_shared, timeout, rc_shared))
     p.start()
     pid = p.pid
 
@@ -402,44 +572,9 @@ def secure_dump(tag, label, url, do_screenshot, timeout, verbose, proxy_port):
         if path:
             shutil.rmtree(path, ignore_errors = True)
 
+    return rc_shared.value
 
 
-def parse_plan(plan):
-    plan_info = {"min": None,
-                 "hour": None,
-                 "wday": None,
-                 "urls": [],
-                 "proxy_port": config.get("proxy", "proxy_port"),
-                 "label": "unnamed test",
-                 "delay": 0,
-                 "screenshot": False}
-
-    for el in plan.split("\n"):
-        el = string.strip(el)
-
-        if el.startswith("label "):
-            plan_info["label"] = string.strip(el[6:])
-        elif el.startswith("every "):
-            when = el[6:].split()
-            if when[1].startswith("min"):
-                plan_info["min"] = int(when[0])
-            elif when[1].startswith("hour"):
-                plan_info["hour"] = int(when[0])
-            elif when[1].startswith("wday"):
-                plan_info["wday"] = int(when[0])
-        elif el.startswith("http"):
-            plan_info["urls"].append(el)
-        elif el.startswith("screenshot"):
-            plan_info["screenshot"] = True
-        elif el.startswith("proxy_port"):
-            plan_info["proxy_port"] = int(el.split()[-1])
-        elif el.startswith("delay"):
-            plan_info["delay"] = int(el.split()[-1])
-        elif el.startswith("script"):
-            plan_info["urls"].append(el)
-
-
-    return plan_info
 
 
 def is_plan_scheduled(plan_info, ts):
@@ -478,13 +613,18 @@ def handle_plan(url, plan_info):
         print "lets do it..."
         print "url:", url
 
-    secure_dump(tag=plan_info["tag"],
-                label=plan_info["label"],
-                url=url,
-                do_screenshot = plan_info["screenshot"],
-                timeout=TIMEOUT,
-                verbose = verbose,
-                proxy_port = plan_info["proxy_port"])
+    for cnt in range(plan_info["retries"] + 1):
+        rc = secure_dump(tag=plan_info["tag"],
+                         label=plan_info["label"],
+                         url=url,
+                         do_screenshot = plan_info["screenshot"],
+                         timeout = plan_info["timeout"],
+                         verbose = verbose,
+                         proxy_port = plan_info["proxy_port"])
+        if rc == "ok":
+            break
+        elif verbose:
+            print "retry:", url
 
     time.sleep(1)
 
@@ -519,6 +659,11 @@ if __name__ == "__main__":
     # setting DISPLAY-Variable for selenium/firefox action
     os.environ["DISPLAY"] = config.get("config", "display")
 
+    # Chaning to the config-path
+    os.chdir(os.path.dirname(os.path.abspath(sys.argv[1])))
+    sys.path.append(os.path.dirname(os.path.abspath(sys.argv[1])))
+
+
     work_queues = {}
     plans = config.items("plan")
     for name, plan in plans:
@@ -534,6 +679,7 @@ if __name__ == "__main__":
 
         for name, plan in plans:
             plan_info = planparser.parse_plan(plan, config)
+            plan_info["tag"] = name
             work_queue = work_queues[name]
             if is_plan_scheduled(plan_info, ts):
                 for url in plan_info["urls"]:

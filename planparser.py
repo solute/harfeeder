@@ -59,7 +59,9 @@ def parse_plan(plan, config):
                  "screenshot": False,
                  "keep_data": str2sec(config.get("config", "keep_data")),
                  "keep_screenshots": str2sec(config.get("config", "keep_screenshots")),
-                 "keep_orphaned_screenshots": str2sec(config.get("config", "keep_orphaned"))
+                 "keep_orphaned_screenshots": str2sec(config.get("config", "keep_orphaned")),
+                 "timeout": 30,
+                 "retry": 0,
                  }
 
     for el in plan.split("\n"):
@@ -91,6 +93,10 @@ def parse_plan(plan, config):
             plan_info["keep_orphaned_screenshots"] = str2sec(el[26:])
         elif el.startswith("script"):
             plan_info["urls"].append(el)
+        elif el.startswith("timeout "):
+            plan_info["timeout"] = int(el[8:])
+        elif el.startswith("retries "):
+            plan_info["retries"] = int(el[8:])
 
 
     return plan_info
