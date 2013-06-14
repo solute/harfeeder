@@ -610,8 +610,7 @@ def handle_plan(url, plan_info):
         time.sleep(plan_info["delay"])
 
     if verbose:
-        print "lets do it..."
-        print "url:", url
+        print time.ctime(), "url:", url
 
     for cnt in range(plan_info["retries"] + 1):
         rc = secure_dump(tag=plan_info["tag"],
@@ -624,7 +623,7 @@ def handle_plan(url, plan_info):
         if rc == "ok":
             break
         elif verbose:
-            print "retry:", url
+            print time.ctime(), "retry:", url
 
     time.sleep(1)
 
