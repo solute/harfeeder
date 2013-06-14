@@ -534,7 +534,7 @@ def dump(tag, label, url, do_screenshot, verbose, proxy_port, profile_browser_pa
 
     finally:
         # Close the browser
-        if firefox.driver:
+        if hasattr(firefox, "driver") and firefox.driver:
             firefox.driver.quit()
 
         # Terminate proxy
