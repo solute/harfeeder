@@ -676,8 +676,10 @@ if __name__ == "__main__":
 
         urls_to_handle = set()
 
+        idx = 0
         for name, plan in plans:
-            plan_info = planparser.parse_plan(plan, config)
+            plan_info = planparser.parse_plan(plan, config, idx)
+            idx += 1
             plan_info["tag"] = name
             work_queue = work_queues[name]
             if is_plan_scheduled(plan_info, ts):

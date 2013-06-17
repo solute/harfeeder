@@ -48,12 +48,13 @@ def str2sec(info):
 
     return int(out)
 
-def parse_plan(plan, config):
-    plan_info = {"min": None,
+def parse_plan(plan, config, idx):
+    plan_info = {"idx": idx,
+                 "min": None,
                  "hour": None,
                  "wday": None,
                  "urls": [],
-                 "proxy_port": config.get("proxy", "proxy_port"),
+                 "proxy_port": int(config.get("proxy", "proxy_port")) + idx,
                  "label": "unnamed test",
                  "delay": 0,
                  "screenshot": False,
@@ -61,10 +62,12 @@ def parse_plan(plan, config):
                  "keep_screenshots": str2sec(config.get("config", "keep_screenshots")),
                  "keep_orphaned_screenshots": str2sec(config.get("config", "keep_orphaned")),
                  "timeout": 30,
-                 "retry": 0,
+                 "retries": 0,
                  }
 
+    idx = 0
     for el in plan.split("\n"):
+
         el = string.strip(el)
 
         if el.startswith("label "):
@@ -82,7 +85,7 @@ def parse_plan(plan, config):
         elif el.startswith("screenshot"):
             plan_info["screenshot"] = True
         elif el.startswith("proxy_port"):
-            plan_info["proxy_port"] = int(el.split()[-1])
+            plan_info["proxy_port"] = int(el.split()[-1]) + idx
         elif el.startswith("delay"):
             plan_info["delay"] = int(el.split()[-1])
         elif el.startswith("keep data "):

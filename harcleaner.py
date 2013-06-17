@@ -51,8 +51,10 @@ def global_cleanup(conn):
     now = time.time()
 
     plans = config.items("plan")
+    idx = 0
     for name, plan in plans:
-        plan_info = planparser.parse_plan(plan, config)
+        plan_info = planparser.parse_plan(plan, config, idx)
+        idx += 1
         print "Cleaning ", name, plan_info["keep_data"]
 
         # remove data
@@ -75,8 +77,10 @@ def taper_off_orphans(conn):
     now = time.time()
 
     plans = config.items("plan")
+    idx = 0
     for name, plan in plans:
-        plan_info = planparser.parse_plan(plan, config)
+        plan_info = planparser.parse_plan(plan, config, idx)
+        idx += 1
         print "Taper off orphans ", name
 
         # everything that has no more data-points
