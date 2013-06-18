@@ -48,8 +48,9 @@ def str2sec(info):
 
     return int(out)
 
-def parse_plan(plan, config, idx):
-    plan_info = {"idx": idx,
+def parse_plan(tag, plan, config, idx):
+    plan_info = {"tag": tag,
+                 "idx": idx,
                  "min": None,
                  "hour": None,
                  "wday": None,

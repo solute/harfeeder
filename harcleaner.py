@@ -33,18 +33,6 @@ class Connection(object):
         self.results = self.db.results
         self.files = self.fs_db.fs.files
 
-def is_plan(conn, file, plan_info):
-    """ Tries to "guess" the plan the file belongs to. Awww, I'd love to have joins... """
-
-    doc_id = file["_id"]
-    results_with_this_file = list(conn.results.find({"screenshot": doc_id}))
-
-    for result in results_with_this_file:
-        if result["tag"] in plan_info["tag"]:
-            return True
-
-    return False
-
 
 def global_cleanup(conn):
 
@@ -53,9 +41,9 @@ def global_cleanup(conn):
     plans = config.items("plan")
     idx = 0
     for name, plan in plans:
-        plan_info = planparser.parse_plan(plan, config, idx)
+        plan_info = planparser.parse_plan(name, plan, config, idx)
         idx += 1
-        print "Cleaning ", name, plan_info["keep_data"]
+        print "Cleaning", name, "..."
 
         # remove data
         keep_until_ts = datetime.datetime.fromtimestamp(now - plan_info["keep_data"])
@@ -66,11 +54,13 @@ def global_cleanup(conn):
         # remove screenshots
         keep_until_ts = datetime.datetime.fromtimestamp(now - plan_info["keep_screenshots"])
 
-        for file in conn.files.find({"uploadDate": {"$lte": keep_until_ts}}):
-            if is_plan(conn, file, plan_info):
-                conn.fs.delete(file["_id"])
+        for file in conn.files.find({"uploadDate": {"$lte": keep_until_ts},
+                                     "tag": plan_info["tag"]}):
+            conn.fs.delete(file["_id"])
 
         rc = conn.results.remove({"tag": name, "timestamp": {"$lte": keep_until}})
+
+        print conn.results.find({"tag": name, "timestamp": {"$lte": keep_until}}).count(), "results deleted."
 
 def taper_off_orphans(conn):
 
@@ -78,27 +68,32 @@ def taper_off_orphans(conn):
 
     plans = config.items("plan")
     idx = 0
+    del_count = 0
     for name, plan in plans:
-        plan_info = planparser.parse_plan(plan, config, idx)
+        plan_info = planparser.parse_plan(name, plan, config, idx)
         idx += 1
-        print "Taper off orphans ", name
 
         # everything that has no more data-points
         taper_until_ts = datetime.datetime.fromtimestamp(now - plan_info["keep_data"])
         delete_until_ts = None
 
-        for file in conn.files.find({"uploadDate": {"$lte": taper_until_ts}},
-                                    sort = [("uploadDate", pymongo.DESCENDING)]):
+        print "Taper off orphans ", name, "(has", conn.files.find({"uploadDate": {"$lte": taper_until_ts},
+                                                                  "tag": plan_info["tag"]}).count(), "candidates)"
 
-            if not is_plan(conn, file, plan_info):
-                continue
+        for file in conn.files.find({"uploadDate": {"$lte": taper_until_ts},
+                                     "tag": plan_info["tag"]},
+                                    sort = [("uploadDate", pymongo.DESCENDING)]):
 
             if not delete_until_ts:
                 delete_until_ts = file["uploadDate"] - datetime.timedelta(seconds = plan_info["keep_orphaned_screenshots"])
             elif delete_until_ts < file["uploadDate"]:
                 conn.fs.delete(file["_id"])
+                del_count += 1
+                if del_count % 1024 == 0:
+                    print "deleted", del_count, "files."
             else:
                 delete_until_ts = None
+
 
 
 
@@ -116,4 +111,4 @@ if __name__ == "__main__":
 
     conn = Connection()
     global_cleanup(conn)
-    #taper_off_orphans(conn)
+    taper_off_orphans(conn)

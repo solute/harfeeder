@@ -53,8 +53,11 @@ if __name__ == "__main__":
 
     for serie in conn.series.find():
         count = conn.results.find({"series": bson.ObjectId(serie["_id"])}).count()
-        mh_count = conn.mh_results.find({"series": bson.ObjectId(serie["_id"])}).count()
-        if count > 10:
-            print serie["title"], count, mh_count
+        if count < 10:
+            print serie["title"], count
+            conn.results.remove({"series": bson.ObjectId(serie["_id"])})
+            conn.series.remove({"_id": bson.ObjectId(serie["_id"])})
+
+
 
 

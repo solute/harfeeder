@@ -678,7 +678,7 @@ if __name__ == "__main__":
 
         idx = 0
         for name, plan in plans:
-            plan_info = planparser.parse_plan(plan, config, idx)
+            plan_info = planparser.parse_plan(name, plan, config, idx)
             idx += 1
             plan_info["tag"] = name
             work_queue = work_queues[name]
