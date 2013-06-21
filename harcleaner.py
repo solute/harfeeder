@@ -31,6 +31,7 @@ class Connection(object):
         self.fs = gridfs.GridFS(self.conn["harstorage_fs"])
 
         self.results = self.db.results
+        self.mh_results = self.db.mh_results
         self.files = self.fs_db.fs.files
 
 
@@ -49,7 +50,11 @@ def global_cleanup(conn):
         keep_until_ts = datetime.datetime.fromtimestamp(now - plan_info["keep_data"])
         keep_until = keep_until_ts.strftime("%Y-%m-%d %H:%M:%S")
 
-        rc = conn.results.remove({"tag": name, "timestamp": {"$lte": keep_until}})
+        doc_count = conn.results.find({"tag": name, "timestamp": {"$lte": keep_until}}).count()
+        doc_count += conn.mh_results.find({"tag": name, "timestamp": {"$lte": keep_until}}).count()
+
+        conn.results.remove({"tag": name, "timestamp": {"$lte": keep_until}})
+        conn.mh_results.remove({"tag": name, "timestamp": {"$lte": keep_until}})
 
         # remove screenshots
         keep_until_ts = datetime.datetime.fromtimestamp(now - plan_info["keep_screenshots"])
@@ -58,9 +63,8 @@ def global_cleanup(conn):
                                      "tag": plan_info["tag"]}):
             conn.fs.delete(file["_id"])
 
-        rc = conn.results.remove({"tag": name, "timestamp": {"$lte": keep_until}})
 
-        print conn.results.find({"tag": name, "timestamp": {"$lte": keep_until}}).count(), "results deleted."
+        print doc_count, "results deleted."
 
 def taper_off_orphans(conn):
 
