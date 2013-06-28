@@ -53,7 +53,7 @@ def parse_plan(tag, plan, config, idx):
                  "idx": idx,
                  "min": None,
                  "hour": None,
-                 "wday": None,
+                 "day": None,
                  "urls": [],
                  "proxy_port": int(config.get("proxy", "proxy_port")) + idx,
                  "label": "unnamed test",
@@ -64,7 +64,7 @@ def parse_plan(tag, plan, config, idx):
                  "keep_orphaned_screenshots": str2sec(config.get("config", "keep_orphaned")),
                  "timeout": 30,
                  "retries": 0,
-                 "priority": "normal"
+                 "priority": "normal",
                  }
 
     idx = 0
@@ -80,13 +80,13 @@ def parse_plan(tag, plan, config, idx):
                 plan_info["min"] = int(when[0])
             elif when[1].startswith("hour"):
                 plan_info["hour"] = int(when[0])
-            elif when[1].startswith("wday"):
-                plan_info["wday"] = int(when[0])
+            elif when[1].startswith("day"):
+                plan_info["day"] = int(when[0])
         elif el.startswith("http"):
             plan_info["urls"].append(el)
         elif el.startswith("("):
             visual, url = re.match("\((.*?)\)\s*?(.*)", el).groups()
-            plan_info["urls"].append((url, visual))
+            plan_info["urls"].append((string.strip(url), string.strip(visual)))
         elif el.startswith("screenshot"):
             plan_info["screenshot"] = True
         elif el.startswith("proxy_port"):

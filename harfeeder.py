@@ -52,6 +52,7 @@ config = ConfigParser.ConfigParser()
 VERBOSE = True
 
 RUNNING_TAGs = set()
+LAST_RUN = {}
 
 def html2text(data):
     # remove the newlines
@@ -645,21 +646,27 @@ def secure_dump(tag, label, url, do_screenshot, timeout, verbose, proxy_port, pr
 
 
 
-def is_plan_scheduled(plan_info, ts):
+def is_plan_scheduled(name, plan_info, ts):
     min = time.localtime(ts).tm_min
     hour = time.localtime(ts).tm_hour
-    wday = time.localtime(ts).tm_wday
+    day = time.localtime(ts).tm_mday
 
-    if not (plan_info["min"] or plan_info["hour"] or plan_info["wday"]):
+    since_last_run = time.time() - LAST_RUN.get(name, 0)
+
+    if not (plan_info["min"] or plan_info["hour"] or plan_info["day"]):
+        LAST_RUN[name] = time.time()
         return True
 
-    if plan_info["min"] and (min % plan_info["min"] == 0):
+    if plan_info["min"] and (min % plan_info["min"] == 0) and (since_last_run >= 60):
+        LAST_RUN[name] = time.time()
         return True
 
-    if plan_info["hour"] and (hour % plan_info["hour"] == 0):
+    if plan_info["hour"] and (hour % plan_info["hour"] == 0) and (since_last_run >= 60 * 60):
+        LAST_RUN[name] = time.time()
         return True
 
-    if plan_info["wday"] and (wday % plan_info["wday"] == 0):
+    if plan_info["day"] and (day % plan_info["day"] == 0) and (since_last_run >= 60 * 60 * 24):
+        LAST_RUN[name] = time.time()
         return True
 
     return False
@@ -750,7 +757,7 @@ if __name__ == "__main__":
             idx += 1
             plan_info["tag"] = name
             work_queue = work_queues[name]
-            if is_plan_scheduled(plan_info, ts):
+            if is_plan_scheduled(name, plan_info, ts):
                 for url in plan_info["urls"]:
                     if url not in urls_to_handle:
                         urls_to_handle.add(url)
