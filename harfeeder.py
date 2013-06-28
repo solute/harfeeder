@@ -1,6 +1,38 @@
 #!/usr/bin/env python
 # coding: utf8
 
+"""
+
+BrowserMobProxy very slow:
+
+
+Ok. I've managed to track this issue.
+If temp folder doesn't have userAgentString.properties file
+
+It assume cache need to be updated. In this case it tries to download results from:
+http://user-agent-string.info/rpc/get_data.php?key=free&format=ini
+and check version from:
+http://user-agent-string.info/rpc/get_data.php?key=free&format=ini&ver=y
+
+It looks like sometimes this server is down. which causes long replies. And it looks like data cannot be downloaded - it is requested on every request.
+
+Workaround:
+create userAgentString.properties file in temp folder with following content:
+lastUpdateCheck=200000000000000
+currentVersion=1
+
+This will prevent cache to be updated.
+
+and create file userAgentString.txt with empty content.
+
+Such actions will produce lot of exceptions in console. but at least it will be working.
+
+To my humble opinion this code of UA parsing is piece of crap. I spent whole day trying to understand why proxy stopped working. And found that cause is piles of unmaintainable unstable and unreliable code :(
+
+
+
+"""
+
 
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException, NoSuchElementException
@@ -18,6 +50,8 @@ import ConfigParser
 config = ConfigParser.ConfigParser()
 
 VERBOSE = True
+
+RUNNING_TAGs = set()
 
 def html2text(data):
     # remove the newlines
@@ -197,15 +231,17 @@ class Firefox():
 
 class AutomationScript(object):
 
-    def __init__(self, tag, label, url, driver, bmp, timeout_shared, timeout, do_screenshot):
+    def __init__(self, tag, label, url, visual, driver, bmp, timeout_shared, timeout, do_screenshot):
 
         if url.startswith("script"):
             self.url = None
+            self.visual = None
             self.script_name = url.split()[1]
             self.args = url.split()[2:]
             self.flow = None
         else:
             self.url = url
+            self.visual = visual
             self.script_name = None
             self.args = None
             self.flow = None
@@ -441,14 +477,15 @@ class AutomationScriptContextManager(object):
         # Read data from container
         har = self.automation_script.bmp.fetch_har()
 
-        har = self.automation_script.bmp.update_har(har, {"tag": self.automation_script.tag})
+        har_update = {"tag": self.automation_script.tag,
+                      "visual": self.automation_script.visual}
 
         if self.info_msg:
-            har = self.automation_script.bmp.update_har(har, {"info": string.join(self.info_msg, "")})
+            har_update["info"] = string.join(self.info_msg, "")
 
         if self.error_msg:
-            har = self.automation_script.bmp.update_har(har, {"error_msg": self.error_msg,
-                                                              "url": self.automation_script.get_url()})
+            har_update["error_msg"] = self.error_msg
+            har_update["url"] = self.automation_script.get_url()
 
         # screenie
         if self.do_screenshot:
@@ -461,7 +498,9 @@ class AutomationScriptContextManager(object):
             i.save(out_buf, format="JPEG", quality=15)
             screen_data = out_buf.getvalue().encode("base64")
 
-            har = self.automation_script.bmp.update_har(har, {"screenshot": screen_data})
+            har_update["screenshot"] = screen_data
+
+        har = self.automation_script.bmp.update_har(har, har_update)
 
         # remember har
         self.automation_script.add_har(har)
@@ -507,15 +546,20 @@ def dump(tag, label, url, do_screenshot, verbose, proxy_port, profile_browser_pa
                               config.get("network", "upstream_kbps"),
                               config.get("network", "latency_ms"))
 
+        if type(url) is tuple:
+            url, visual = url
+        else:
+            visual = None
+
         script = AutomationScript(tag = tag,
                                   url = url,
+                                  visual = visual,
                                   label = label,
                                   do_screenshot=do_screenshot,
                                   driver=firefox.driver,
                                   bmp=bmp,
                                   timeout_shared=timeout_shared,
                                   timeout=timeout)
-
         script.setup()
         script.execute()
 
@@ -523,6 +567,7 @@ def dump(tag, label, url, do_screenshot, verbose, proxy_port, profile_browser_pa
         harstorage = HarStorage(config.get("harstorage", "harstorage_host"),
                                 config.get("harstorage", "harstorage_port"))
         rc = harstorage.save(script.get_hars())
+
 
         if verbose:
             if rc == "Successful":
@@ -544,7 +589,25 @@ def dump(tag, label, url, do_screenshot, verbose, proxy_port, profile_browser_pa
 
 
 
-def secure_dump(tag, label, url, do_screenshot, timeout, verbose, proxy_port):
+def secure_dump(tag, label, url, do_screenshot, timeout, verbose, proxy_port, priority):
+
+    # priority-handling
+    if priority == "low":
+        # runs only if no other task is running
+        while RUNNING_TAGs:
+            time.sleep(0.5)
+        RUNNING_TAGs.add(tag)
+    elif priority == "exclusive":
+        # waits until all other tasks are ready, locking other tasks to start
+        RUNNING_TAGs.add("__exclusive__")
+        while len(RUNNING_TAGs) > 1:
+            time.sleep(0.5)
+        RUNNING_TAGs.add(tag)
+    else:
+        # "normal" tasks only wait for "exclusive" tasks
+        while "__exclusive__" in RUNNING_TAGs:
+            time.sleep(0.5)
+        RUNNING_TAGs.add(tag)
 
     browser_profile_path = multiprocessing.Array("c", 256)
     timeout_shared = multiprocessing.Value("i", timeout)
@@ -571,6 +634,11 @@ def secure_dump(tag, label, url, do_screenshot, timeout, verbose, proxy_port):
         path = path.replace("/webdriver-py-profilecopy", "")
         if path:
             shutil.rmtree(path, ignore_errors = True)
+
+    RUNNING_TAGs.remove(tag)
+
+    if priority == "exclusive":
+        RUNNING_TAGs.remove("__exclusive__")
 
     return rc_shared.value
 
@@ -619,7 +687,8 @@ def handle_plan(url, plan_info):
                          do_screenshot = plan_info["screenshot"],
                          timeout = plan_info["timeout"],
                          verbose = verbose,
-                         proxy_port = plan_info["proxy_port"])
+                         proxy_port = plan_info["proxy_port"],
+                         priority = plan_info["priority"])
         if rc == "ok":
             break
         elif verbose:
@@ -641,7 +710,6 @@ def worker_thread(name, queue):
                 traceback.print_exc()
 
         else:
-            print name, " waiting for work..."
             time.sleep(5)
 
 if __name__ == "__main__":

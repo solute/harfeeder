@@ -1,6 +1,6 @@
 # coding: utf-8
 
-import string
+import string, re
 
 
 def str2sec(info):
@@ -64,6 +64,7 @@ def parse_plan(tag, plan, config, idx):
                  "keep_orphaned_screenshots": str2sec(config.get("config", "keep_orphaned")),
                  "timeout": 30,
                  "retries": 0,
+                 "priority": "normal"
                  }
 
     idx = 0
@@ -83,6 +84,9 @@ def parse_plan(tag, plan, config, idx):
                 plan_info["wday"] = int(when[0])
         elif el.startswith("http"):
             plan_info["urls"].append(el)
+        elif el.startswith("("):
+            visual, url = re.match("\((.*?)\)\s*?(.*)", el).groups()
+            plan_info["urls"].append((url, visual))
         elif el.startswith("screenshot"):
             plan_info["screenshot"] = True
         elif el.startswith("proxy_port"):
@@ -101,6 +105,8 @@ def parse_plan(tag, plan, config, idx):
             plan_info["timeout"] = int(el[8:])
         elif el.startswith("retries "):
             plan_info["retries"] = int(el[8:])
+        elif el.startswith("priority "):
+            plan_info["priority"] = string.strip(el[9:])
 
 
     return plan_info
